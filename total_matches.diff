@@ -1,0 +1,171 @@
+diff --git a/shell/eggfindbar.c b/shell/eggfindbar.c
+index daaec5c..8d59c45 100644
+--- a/shell/eggfindbar.c
++++ b/shell/eggfindbar.c
+@@ -33,9 +33,11 @@ struct _EggFindBarPrivate
+   GtkWidget *next_button;
+   GtkWidget *previous_button;
+   GtkToolItem *status_item;
++  GtkToolItem *total_item;
+ 
+   GtkWidget *find_entry;
+   GtkWidget *status_label;
++  GtkWidget *total_label;
+ 
+   guint case_sensitive : 1;
+   guint case_sensitive_enabled : 1;
+@@ -440,6 +442,17 @@ egg_find_bar_init (EggFindBar *find_bar)
+   gtk_widget_show (priv->status_label);
+   gtk_container_add (GTK_CONTAINER (find_bar), GTK_WIDGET (priv->status_item));
+ 
++  /*Total Count*/
++  priv->total_item = gtk_tool_item_new();
++  gtk_tool_item_set_expand (priv->total_item, TRUE);
++  priv->total_label = gtk_label_new (NULL);
++  gtk_label_set_ellipsize (GTK_LABEL (priv->total_label),
++                           PANGO_ELLIPSIZE_END);
++  gtk_misc_set_alignment (GTK_MISC (priv->total_label), 0.0, 0.5);
++  gtk_container_add (GTK_CONTAINER (priv->total_item), priv->total_label);
++  gtk_widget_show (priv->total_label);
++  gtk_container_add (GTK_CONTAINER (find_bar), GTK_WIDGET (priv->total_item));
++
+   /* Separator */
+   item = gtk_tool_item_new ();
+   gtk_tool_item_set_expand (GTK_TOOL_ITEM (item), TRUE);
+@@ -825,3 +838,31 @@ egg_find_bar_set_status_text (EggFindBar *find_bar,
+ 
+   g_object_set (priv->status_item, "visible", text != NULL && *text !='\0', NULL);
+ }
++
++/**
++ * egg_find_bar_set_total_text:
++ *
++ * Sets some text to display if there's space; typical text would
++ * be something like "9 matches in document" or ""
++ *
++ * @text: the text to display
++ *
++ */
++void
++egg_find_bar_set_total_text (EggFindBar *find_bar,
++                              const char *text)
++{
++  EggFindBarPrivate *priv;
++  const gchar *current_text;
++
++  g_return_if_fail (EGG_IS_FIND_BAR (find_bar));
++
++  priv = (EggFindBarPrivate *)find_bar->priv;
++
++  current_text = gtk_label_get_text (GTK_LABEL (priv->total_label));
++
++  if (g_strcmp0 (current_text, text) != 0)
++	  gtk_label_set_text (GTK_LABEL (priv->total_label), text);
++
++  g_object_set (priv->total_item, "visible", text != NULL && *text !='\0', NULL);
++}
+diff --git a/shell/eggfindbar.h b/shell/eggfindbar.h
+index c7280db..8282348 100644
+--- a/shell/eggfindbar.h
++++ b/shell/eggfindbar.h
+@@ -81,6 +81,8 @@ void        egg_find_bar_get_current_match_color (EggFindBar *find_bar,
+                                                   GdkColor   *color);
+ void        egg_find_bar_set_status_text         (EggFindBar *find_bar,
+                                                   const char *text);
++void        egg_find_bar_set_total_text         (EggFindBar *find_bar,
++                                                  const char *text);
+ 
+ G_END_DECLS
+ 
+diff --git a/shell/ev-find-sidebar.c b/shell/ev-find-sidebar.c
+index 0f7a336..8f46271 100644
+--- a/shell/ev-find-sidebar.c
++++ b/shell/ev-find-sidebar.c
+@@ -657,3 +657,24 @@ ev_find_sidebar_next (EvFindSidebar *sidebar)
+         }
+         ev_find_sidebar_select_highlighted_result (sidebar);
+ }
++
++gint
++ev_find_sidebar_total (EvFindSidebar *sidebar)
++{
++		EvFindSidebarPrivate *priv = sidebar->priv;
++		GtkTreeModel         *model;
++		GtkTreeIter           iter;
++		gint results = 0;
++
++		model = gtk_tree_view_get_model (GTK_TREE_VIEW (priv->tree_view));
++
++		if (gtk_tree_model_get_iter_first (model, &iter)) {
++				++results;
++				while (gtk_tree_model_iter_next (model, &iter)){
++						++results;
++				}
++				return results;
++		} else {
++				return 0;
++		}
++}
+diff --git a/shell/ev-find-sidebar.h b/shell/ev-find-sidebar.h
+index 12b00c5..b23ebbe 100644
+--- a/shell/ev-find-sidebar.h
++++ b/shell/ev-find-sidebar.h
+@@ -60,6 +60,7 @@ void       ev_find_sidebar_update   (EvFindSidebar *find_sidebar);
+ void       ev_find_sidebar_clear    (EvFindSidebar *find_sidebar);
+ void       ev_find_sidebar_previous (EvFindSidebar *find_sidebar);
+ void       ev_find_sidebar_next     (EvFindSidebar *find_sidebar);
++gint       ev_find_sidebar_total    (EvFindSidebar *find_sidebar);
+ 
+ G_END_DECLS
+ 
+diff --git a/shell/ev-window.c b/shell/ev-window.c
+index 978c55f..b300405 100644
+--- a/shell/ev-window.c
++++ b/shell/ev-window.c
+@@ -5363,7 +5363,8 @@ find_sidebar_result_activated_cb (EvFindSidebar *find_sidebar,
+ static void
+ ev_window_update_find_status_message (EvWindow *ev_window)
+ {
+-	gchar *message;
++	gchar *message, *message_total;
++	gint total_matches = 0;
+ 
+ 	if (!ev_window->priv->find_job)
+ 		return;
+@@ -5386,16 +5387,28 @@ ev_window_update_find_status_message (EvWindow *ev_window)
+ 		} else {
+ 			message = g_strdup (_("Not found"));
+ 		}
++		total_matches = ev_find_sidebar_total(EV_FIND_SIDEBAR (ev_window->priv->find_sidebar));
++		if (total_matches != 0) {
++			message_total = ((total_matches == 1) ?
++					g_strdup_printf ("%d match in document", total_matches) :
++					g_strdup_printf ("%d matches in document", total_matches));
++
++		} else {
++			message_total = g_strdup ("");
++		}
+ 	} else {
+ 		gdouble percent;
+ 
+ 		percent = ev_job_find_get_progress (EV_JOB_FIND (ev_window->priv->find_job));
+ 		message = g_strdup_printf (_("%3d%% remaining to search"),
+ 					   (gint) ((1.0 - percent) * 100));
++		message_total = g_strdup ("");
+ 	}
+ 	
+ 	egg_find_bar_set_status_text (EGG_FIND_BAR (ev_window->priv->find_bar), message);
++	egg_find_bar_set_total_text (EGG_FIND_BAR (ev_window->priv->find_bar), message_total);
+ 	g_free (message);
++	g_free (message_total);
+ }
+ 
+ static void
+@@ -5521,6 +5534,7 @@ ev_window_search_start (EvWindow *ev_window)
+ 	} else {
+ 		ev_window_update_actions_sensitivity (ev_window);
+ 		egg_find_bar_set_status_text (find_bar, NULL);
++		egg_find_bar_set_total_text (find_bar, NULL);
+ 		ev_find_sidebar_clear (EV_FIND_SIDEBAR (ev_window->priv->find_sidebar));
+ 		gtk_widget_queue_draw (GTK_WIDGET (ev_window->priv->view));
+ 	}
