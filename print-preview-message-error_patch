@@ -1,0 +1,127 @@
+diff --git a/libview/ev-print-operation.c b/libview/ev-print-operation.c
+index f4ccf14..39085ba 100644
+--- a/libview/ev-print-operation.c
++++ b/libview/ev-print-operation.c
+@@ -53,6 +53,9 @@ struct _EvPrintOperation {
+ 	/* Progress */
+ 	gchar      *status;
+ 	gdouble     progress;
++
++	/* Print Preview */
++	gboolean    set_preview;
+ };
+ 
+ struct _EvPrintOperationClass {
+@@ -323,6 +326,12 @@ ev_print_operation_get_status (EvPrintOperation *op)
+ 	return op->status ? op->status : "";
+ }
+ 
++gboolean
++ev_print_operation_get_preview (EvPrintOperation *op)
++{
++	return op->set_preview;
++}
++
+ gdouble
+ ev_print_operation_get_progress (EvPrintOperation *op)
+ {
+@@ -342,14 +351,26 @@ ev_print_operation_update_status (EvPrintOperation *op,
+ 
+ 	g_free (op->status);
+ 
+-	if (page == -1) {
+-		/* Initial state */
+-		op->status = g_strdup (_("Preparing to print…"));
+-	} else if (page > n_pages) {
+-		op->status = g_strdup (_("Finishing…"));
++	if (op->set_preview) {
++		if (page == -1) {
++			/* Initial state */
++			op->status = g_strdup (_("Preparing preview…"));
++		} else if (page > n_pages) {
++			op->status = g_strdup (_("Finishing preview…"));
++		} else {
++			op->status = g_strdup_printf (_("Building preview page %d of %d…"),
++							page, n_pages);
++		}
+ 	} else {
+-		op->status = g_strdup_printf (_("Printing page %d of %d…"),
+-					      page, n_pages);
++		if (page == -1) {
++			/* Initial state */
++			op->status = g_strdup (_("Preparing to print…"));
++		} else if (page > n_pages) {
++			op->status = g_strdup (_("Finishing…"));
++		} else {
++			op->status = g_strdup_printf (_("Printing page %d of %d…"),
++							page, n_pages);
++		}
+ 	}
+ 
+ 	op->progress = MIN (1.0, progress);
+@@ -1704,6 +1725,15 @@ ev_print_operation_print_status_changed (EvPrintOperationPrint *print)
+ 		print->n_pages_to_print = gtk_print_operation_get_n_pages_to_print (print->op);
+ }
+ 
++static gboolean
++ev_print_operation_print_preview (EvPrintOperationPrint *print)
++{
++   EvPrintOperation *op = EV_PRINT_OPERATION (print);
++   op->set_preview = TRUE;
++
++   return FALSE;
++}
++
+ static void
+ print_job_finished (EvJobPrint            *job,
+ 		    EvPrintOperationPrint *print)
+@@ -2008,6 +2038,9 @@ ev_print_operation_print_init (EvPrintOperationPrint *print)
+ 	g_signal_connect_swapped (print->op, "status_changed",
+ 				  G_CALLBACK (ev_print_operation_print_status_changed),
+ 				  print);
++	g_signal_connect_swapped (print->op, "preview",
++				  G_CALLBACK (ev_print_operation_print_preview),
++				  print);
+ 	g_signal_connect_swapped (print->op, "request_page_setup",
+ 				  G_CALLBACK (ev_print_operation_print_request_page_setup),
+ 				  print);
+diff --git a/libview/ev-print-operation.h b/libview/ev-print-operation.h
+index 5c80664..d182b29 100644
+--- a/libview/ev-print-operation.h
++++ b/libview/ev-print-operation.h
+@@ -66,6 +66,7 @@ void              ev_print_operation_set_embed_page_setup   (EvPrintOperation *o
+ gboolean          ev_print_operation_get_embed_page_setup   (EvPrintOperation *op);
+ const gchar      *ev_print_operation_get_status             (EvPrintOperation *op);
+ gdouble           ev_print_operation_get_progress           (EvPrintOperation *op);
++gboolean          ev_print_operation_get_preview            (EvPrintOperation *op);
+ 
+ G_END_DECLS
+ 	
+diff --git a/shell/ev-window.c b/shell/ev-window.c
+index 978c55f..b15e557 100644
+--- a/shell/ev-window.c
++++ b/shell/ev-window.c
+@@ -3441,9 +3441,11 @@ ev_window_print_operation_status_changed (EvPrintOperation *op,
+ {
+ 	const gchar *status;
+ 	gdouble      fraction;
++	gboolean     set_preview;
+ 
+ 	status = ev_print_operation_get_status (op);
+ 	fraction = ev_print_operation_get_progress (op);
++	set_preview = ev_print_operation_get_preview (op);
+ 	
+ 	if (!ev_window->priv->message_area) {
+ 		GtkWidget   *area;
+@@ -3451,7 +3453,10 @@ ev_window_print_operation_status_changed (EvPrintOperation *op,
+ 		gchar       *text;
+ 
+ 		job_name = ev_print_operation_get_job_name (op);
+-		text = g_strdup_printf (_("Printing job “%s”"), job_name);
++		if (set_preview)
++			text = g_strdup_printf (_("Preparing print preview for job “%s”"), job_name);
++		else
++			text = g_strdup_printf (_("Printing job “%s”"), job_name);
+ 
+ 		area = ev_progress_message_area_new (GTK_STOCK_PRINT,
+ 						     text,
